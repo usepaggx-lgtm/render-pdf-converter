@@ -1,6 +1,6 @@
 const express = require('express');
 const multer = require('multer');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -17,12 +17,15 @@ app.post('/convert', upload.single('file'), (req, res) => {
   const pdfPath = path.join(tmpDir, 'input.pdf');
 
   try {
+    const fileSizeKb = Math.round(req.file.size / 1024);
+    console.log(`Converting ${fileSizeKb}KB PDF: ${req.file.originalname}`);
+
     fs.writeFileSync(pdfPath, req.file.buffer);
 
-    execSync(
-      `pdftoppm -jpeg -r 150 -f 1 -l 1 "${pdfPath}" "${path.join(tmpDir, "out")}"`,
-      { stdio: 'pipe', timeout: 30000 }
-    );
+    execFileSync('pdftoppm', [
+      '-jpeg', '-r', '100', '-f', '1', '-l', '1',
+      pdfPath, path.join(tmpDir, 'out')
+    ], { stdio: 'pipe', timeout: 60000, killSignal: 'SIGKILL' });
 
     const resultPath = path.join(tmpDir, 'out-1.jpg');
     if (!fs.existsSync(resultPath)) {
@@ -30,19 +33,26 @@ app.post('/convert', upload.single('file'), (req, res) => {
     }
 
     const jpeg = fs.readFileSync(resultPath);
+    console.log(`Converted OK: ${jpeg.length} bytes`);
 
     res.set('Content-Type', 'image/jpeg');
-    res.set('X-Converted-From', 'pdf');
     res.send(jpeg);
   } catch (err) {
-    console.error('Conversion failed:', err);
+    console.error('Conversion failed:', err.message);
     res.status(500).json({ error: err.message });
   } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
   }
 });
 
-app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+app.get('/health', (_req, res) => {
+  try {
+    execFileSync('which', ['pdftoppm'], { stdio: 'pipe' });
+    res.json({ status: 'ok', pdftoppm: true });
+  } catch {
+    res.json({ status: 'degraded', pdftoppm: false });
+  }
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`PDF converter running on port ${PORT}`));
